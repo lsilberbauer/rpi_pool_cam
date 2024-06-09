@@ -1,0 +1,15 @@
+leds:
+  rectangle_origin: [372, 755]
+  rectangle_size: [115, 80]
+  empty_indicator:
+    origin: [91, 39]
+    radius: 4
+  fill_level:
+    - 1:
+      origin: [10, 50]
+      radius: 4
+
+
+lcd:
+  rectangle_origin: [1837, 1152]
+  rectangle_size: [114, 58]
