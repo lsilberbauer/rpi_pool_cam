@@ -106,7 +106,7 @@ class MyHandler(BaseHTTPRequestHandler):
                 leds_annotated = cam_image_processor.get_led_status(frame, True)
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 time = strftime("%H:%M:%S", localtime())
-                leds = cv2.putText(leds, time, 
+                leds = cv2.putText(leds_annotated, time, 
                     (55, 75), font, 0.4,
                     (210, 155, 155), 1, cv2.LINE_8)
                 jpg = cv2.imencode('.jpg', leds_annotated)[1]
