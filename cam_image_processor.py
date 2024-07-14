@@ -54,9 +54,9 @@ def get_led_status(image, return_annotated=False):
     return_json = "{ "
     for color in led_colors:
         euclidian_distance = math.dist(led_colors[color], tuple(config["leds"][color]["color"]))
-        status = "1"
+        status = "0"
         if euclidian_distance < 100: 
-            status = "0"
+            status = "1"
         return_json = return_json + (f"\"{color}\": {status}, ")
 
     return_json = return_json + " }"
