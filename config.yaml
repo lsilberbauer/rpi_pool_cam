@@ -1,13 +1,43 @@
 leds:
   rectangle_origin: [372, 755]
   rectangle_size: [115, 80]
-  empty_indicator:
+
+  K1:
+    origin: [95, 12]
+    radius: 2
+    color: [66, 88, 142]
+  K2:
+    origin: [93, 25]
+    radius: 4
+    color: [66, 88, 142]
+  K3:
     origin: [91, 39]
     radius: 4
-  fill_level:
-    - 1:
-      origin: [10, 50]
-      radius: 4
+    color: [66, 88, 142]
+  S1:
+    origin: [21, 16]
+    radius: 5      
+    color: [153, 191, 176]
+  S2:
+    origin: [21, 30]
+    radius: 5      
+    color: [153, 191, 176]
+  S3:
+    origin: [21, 44]
+    radius: 5      
+    color: [153, 191, 176]
+  S4:
+    origin: [21, 58]
+    radius: 5
+    color: [153, 191, 176]
+  Status: 
+    origin: [51, 62]
+    radius: 5
+    color: [153, 191, 176]
+  Black:
+    origin: [93, 60]
+    radius: 8
+    color: [0 , 0 , 0]
 
 
 lcd:

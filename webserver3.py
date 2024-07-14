@@ -9,6 +9,7 @@ from threading import Thread
 from fractions import Fraction
 import numpy as np
 import cv2
+import cam_image_processor
 
 # Portnummer für den Webserver
 PORT_NUMBER = 8000
@@ -45,7 +46,7 @@ class MyHandler(BaseHTTPRequestHandler):
             self.wfile.write('<html><body>'.encode('utf-8'))
             self.wfile.write('<img src="image.jpg">'.encode('utf-8'))
             self.wfile.write('<img src="digital.jpg">'.encode('utf-8'))
-            self.wfile.write('<img src="leds.jpg">'.encode('utf-8'))
+            self.wfile.write('<img src="leds_annotated.jpg">'.encode('utf-8'))
             self.wfile.write('</body></html>'.encode('utf-8'))
         elif self.path == '/image.jpg':
             self.send_response(200)
@@ -82,6 +83,29 @@ class MyHandler(BaseHTTPRequestHandler):
                 leds = frame[759:759+80, 377:377+115]
                 jpg = cv2.imencode('.jpg', leds)
                 self.wfile.write(jpg)                    
+        elif self.path == '/leds_annotated.jpg':
+            self.send_response(200)
+            self.send_header('Cache-Control', 'no-store, must-revalidate')
+            self.send_header('Expires', '0')
+            self.send_header('Content-type', 'image/jpeg')
+            self.end_headers()
+
+            frame = image_stream.get_frame()
+            if frame is not None:
+                leds_annotated = cam_image_processor(frame, True)
+                jpg = cv2.imencode('.jpg', leds_annotated)
+                self.wfile.write(jpg)
+        elif self.path == '/leds_json':
+            self.send_response(200)
+            self.send_header('Cache-Control', 'no-store, must-revalidate')
+            self.send_header('Expires', '0')
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+
+            frame = image_stream.get_frame()
+            if frame is not None:
+                leds_status = cam_image_processor(frame, False)
+                self.wfile.write(leds_status.encode('utf-8'))         
         else:
             self.send_response(404)
             self.end_headers()
