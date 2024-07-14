@@ -35,40 +35,38 @@ def get_led_status(image, return_annotated=False):
     leds = crop_rectangle(image, config["leds"]["rectangle_origin"], config["leds"]["rectangle_size"])
     lcd = crop_rectangle(image, config["lcd"]["rectangle_origin"], config["lcd"]["rectangle_size"])
 
-    leds_dict = { 
-        "K1": (255, 0, 0), 
-        "K2": (200, 20, 20), 
-        "K3": (150, 50, 50),
-        "S1": (0, 255, 0 ),
-        "S2": (40, 200, 40 ),
-        "S3": (80, 150, 80 ),
-        "S4": (120, 100, 120 ),
-        "Status": (0, 200, 200 ),
-        "Black": (0, 0, 200)
-        }
+    led_states = {}
+    for led in list(config["leds"].keys())[2:]:
+        color = get_led_color(leds, config["leds"][led]["origin"], config["leds"][led]["radius"])
+        euclidian_distance = math.dist(color, tuple(config["leds"][led]["color"]))
+        led_states[led] = True if euclidian_distance < 100 else False
 
-    led_colors = {}
-    for led in leds_dict:
-        led_colors[led] = get_led_color(leds, config["leds"][led]["origin"], config["leds"][led]["radius"])
+    fill_level = 0
 
-    return_json = "{ "
-    for color in led_colors:
-        euclidian_distance = math.dist(led_colors[color], tuple(config["leds"][color]["color"]))
-        status = "0"
-        if euclidian_distance < 100: 
-            status = "1"
-        return_json = return_json + (f"\"{color}\": {status}, ")
+    if led_states["S1"]:
+        fill_level = 1
+    elif led_states["S2"]:
+        fill_level = 0.75
+    elif led_states["S3"]:
+        fill_level = 0.5
+    elif led_states["S4"]:
+        fill_level = 0.25
 
-    return_json = return_json + " }"
+    valid = False
+
+    if led_states["Status"] and not led_states["Error"] and led_states["Black"]:
+        valid = True
+
+    return_json = "{" + f"Valid: {valid}, K1: {led_states["K1"]}, K2: {led_states["K2"]}, K3: {led_states["K3"]}, FillLevel: {fill_level}" + "}"
 
     if (return_annotated):
-        image = draw_rectangle(image, config["leds"]["rectangle_origin"], config["leds"]["rectangle_size"])
-        image = draw_rectangle(image, config["lcd"]["rectangle_origin"], config["lcd"]["rectangle_size"])
-
         annotated_leds = leds.copy()
 
-        for led in leds_dict:
-            annotated_leds = annotate_led(annotated_leds, config["leds"][led]["origin"], config["leds"][led]["radius"], leds_dict[led])
+        draw_rectangle(annotated_leds, config["leds"]["rectangle_origin"], config["leds"]["rectangle_size"])
+        draw_rectangle(annotated_leds, config["lcd"]["rectangle_origin"], config["lcd"]["rectangle_size"])        
+
+        for led in list(config["leds"].keys())[2:]:
+            annotated_leds = annotate_led(annotated_leds, config["leds"][led]["origin"], config["leds"][led]["radius"], (200, 0, 200))
 
         return annotated_leds
     else:
