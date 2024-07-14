@@ -10,6 +10,7 @@ from fractions import Fraction
 import numpy as np
 import cv2
 import cam_image_processor
+from time import localtime, strftime
 
 # Portnummer für den Webserver
 PORT_NUMBER = 8000
@@ -68,7 +69,12 @@ class MyHandler(BaseHTTPRequestHandler):
             # Aktuelles Bild als Antwort senden
             frame = image_stream.get_frame()            
             if frame is not None:
-                digital = frame[1157:1157+58, 1832:1832+114]
+                digital = frame[1157:1157+80, 1835:1835+115].copy()
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                time = strftime("%H:%M:%S", localtime())
+                digital = cv2.putText(digital, time, 
+                    (55, 75), font, 0.4,
+                    (210, 155, 155), 1, cv2.LINE_8)
                 jpg = cv2.imencode('.jpg', digital)[1]
                 self.wfile.write(jpg)              
         elif self.path == '/leds.jpg':
@@ -78,9 +84,14 @@ class MyHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'image/jpeg')
             self.end_headers()
             # Aktuelles Bild als Antwort senden
-            frame = image_stream.get_frame()            
+            frame = image_stream.get_frame().copy()            
             if frame is not None:
                 leds = frame[759:759+80, 377:377+115]
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                time = strftime("%H:%M:%S", localtime())
+                leds = cv2.putText(leds, time, 
+                    (55, 75), font, 0.4,
+                    (210, 155, 155), 1, cv2.LINE_8)
                 jpg = cv2.imencode('.jpg', leds)[1]
                 self.wfile.write(jpg)                    
         elif self.path == '/leds_annotated.jpg':
@@ -90,9 +101,14 @@ class MyHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'image/jpeg')
             self.end_headers()
 
-            frame = image_stream.get_frame()
+            frame = image_stream.get_frame().copy()
             if frame is not None:
                 leds_annotated = cam_image_processor.get_led_status(frame, True)
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                time = strftime("%H:%M:%S", localtime())
+                leds = cv2.putText(leds, time, 
+                    (55, 75), font, 0.4,
+                    (210, 155, 155), 1, cv2.LINE_8)
                 jpg = cv2.imencode('.jpg', leds_annotated)[1]
                 self.wfile.write(jpg)
         elif self.path == '/leds_json':
