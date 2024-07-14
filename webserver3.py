@@ -115,7 +115,7 @@ class MyHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Cache-Control', 'no-store, must-revalidate')
             self.send_header('Expires', '0')
-            self.send_header('Content-type', 'application/json')
+            self.send_header('Content-type', 'text/xml')
             self.end_headers()
 
             frame = image_stream.get_frame()
