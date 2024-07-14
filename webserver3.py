@@ -57,7 +57,7 @@ class MyHandler(BaseHTTPRequestHandler):
             # Aktuelles Bild als Antwort senden
             frame = image_stream.get_frame()            
             if frame is not None:
-                jpg = cv2.imencode('.jpg', frame)
+                jpg = cv2.imencode('.jpg', frame)[1]
                 self.wfile.write(jpg)
         elif self.path == '/digital.jpg':
             self.send_response(200)
@@ -69,7 +69,7 @@ class MyHandler(BaseHTTPRequestHandler):
             frame = image_stream.get_frame()            
             if frame is not None:
                 digital = frame[1157:1157+58, 1832:1832+114]
-                jpg = cv2.imencode('.jpg', digital)
+                jpg = cv2.imencode('.jpg', digital)[1]
                 self.wfile.write(jpg)              
         elif self.path == '/leds.jpg':
             self.send_response(200)
@@ -81,7 +81,7 @@ class MyHandler(BaseHTTPRequestHandler):
             frame = image_stream.get_frame()            
             if frame is not None:
                 leds = frame[759:759+80, 377:377+115]
-                jpg = cv2.imencode('.jpg', leds)
+                jpg = cv2.imencode('.jpg', leds)[1]
                 self.wfile.write(jpg)                    
         elif self.path == '/leds_annotated.jpg':
             self.send_response(200)
@@ -92,8 +92,8 @@ class MyHandler(BaseHTTPRequestHandler):
 
             frame = image_stream.get_frame()
             if frame is not None:
-                leds_annotated = cam_image_processor(frame, True)
-                jpg = cv2.imencode('.jpg', leds_annotated)
+                leds_annotated = cam_image_processor.get_led_status(frame, True)
+                jpg = cv2.imencode('.jpg', leds_annotated)[1]
                 self.wfile.write(jpg)
         elif self.path == '/leds_json':
             self.send_response(200)
@@ -104,7 +104,7 @@ class MyHandler(BaseHTTPRequestHandler):
 
             frame = image_stream.get_frame()
             if frame is not None:
-                leds_status = cam_image_processor(frame, False)
+                leds_status = cam_image_processor.get_led_status(frame, False)
                 self.wfile.write(leds_status.encode('utf-8'))         
         else:
             self.send_response(404)
@@ -118,7 +118,7 @@ def capture_image():
     while True:
 
         camera = PiCamera(
-            resolution=(2592, 1944),
+            resolution=(2592, 1952),
             framerate=1,
             sensor_mode=3)
         camera.led=False    
@@ -128,11 +128,11 @@ def capture_image():
         time.sleep(5)
         camera.exposure_mode = 'off'
 
-        image = np.empty((1944 * 2592 * 3,), dtype=np.uint8)
+        image = np.empty((1952 * 2592 * 3,), dtype=np.uint8)
         camera.annotate_text = dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')       
 
         camera.capture(image, format='bgr')
-        image = image.reshape((1944, 2592, 3))
+        image = image.reshape((1952, 2592, 3))
         image_stream.update_frame(image)
         camera.close()
         time.sleep(60)
