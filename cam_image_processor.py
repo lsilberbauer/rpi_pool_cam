@@ -54,10 +54,10 @@ def get_led_status(image, return_annotated=False):
 
     valid = False
 
-    if led_states["Status"] and not led_states["Error"] and led_states["Black"]:
+    if led_states["Status"] and led_states["Black"]:
         valid = True
 
-    return_json = f"{{ Valid: {valid}, K1: {led_states['K1']}, K2: {led_states['K2']}, K3: {led_states['K3']}, FillLevel: {fill_level} }}"
+    return_json = f"{{ Valid: {valid}, K1: {led_states['K1']}, K2: {led_states['K2']}, K3: {led_states['K3']}, Error: {led_states['Error']}, FillLevel: {fill_level} }}"
 
     if (return_annotated):
         annotated_leds = leds.copy()
