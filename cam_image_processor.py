@@ -44,13 +44,13 @@ def get_led_status(image, return_annotated=False):
     fill_level = 0
 
     if led_states["S1"]:
-        fill_level = 1
+        fill_level = 100
     elif led_states["S2"]:
-        fill_level = 0.75
+        fill_level = 75
     elif led_states["S3"]:
-        fill_level = 0.5
+        fill_level = 50
     elif led_states["S4"]:
-        fill_level = 0.25
+        fill_level = 25
 
     valid = False
 
