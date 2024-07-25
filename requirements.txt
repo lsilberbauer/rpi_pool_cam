@@ -1,4 +1,7 @@
-opencv-python==4.5.3.56
+#opencv-python==4.5.3.56
+opencv-python
 pyyaml
 matplotlib
-numpy==1.19.3
+#numpy==1.19.3
+numpy
+pytest

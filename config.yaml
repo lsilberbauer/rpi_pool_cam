@@ -5,11 +5,11 @@ leds:
   K1:
     origin: [95, 12]
     radius: 2
-    color: [66, 88, 142]
+    color: [78, 74, 161]
   K2:
     origin: [96, 25]
     radius: 3
-    color: [66, 88, 142]
+    color: [195, 217, 240]
   K3:
     origin: [96, 40]
     radius: 3
@@ -45,5 +45,6 @@ leds:
 
 
 lcd:
-  rectangle_origin: [1837, 1152]
-  rectangle_size: [114, 58]
+  rectangle_origin: [1827, 1142]
+  rectangle_size: [140, 85]
+  screen: [[10,15], [120,18], [120,60], [17,60]]

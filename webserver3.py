@@ -9,8 +9,9 @@ from threading import Thread
 from fractions import Fraction
 import numpy as np
 import cv2
-import cam_image_processor
+from src.cam_image_processor import CamImageProcessor
 from time import localtime, strftime
+import yaml
 
 # Portnummer für den Webserver
 PORT_NUMBER = 8000
@@ -19,19 +20,29 @@ PORT_NUMBER = 8000
 class ImageStream:
     def __init__(self):
         self.frame = None
+        self.cip = None
         self.frame_lock = threading.Lock()
 
     def update_frame(self, frame):
         with self.frame_lock:
             self.frame = frame
+            self.cip = CamImageProcessor(config, frame)
+
         print("Frame updated")
 
     def get_frame(self):
         with self.frame_lock:
             return self.frame        
 
+    def get_cip(self):
+        with self.frame_lock:
+            return self.cip     
+
 # Bild-Stream-Objekt erstellen
 image_stream = ImageStream()
+
+with open('config.yaml', 'r') as file:
+    config = yaml.safe_load(file)
 
 # Handler-Klasse für den HTTP-Server
 class MyHandler(BaseHTTPRequestHandler):
@@ -101,9 +112,9 @@ class MyHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'image/jpeg')
             self.end_headers()
 
-            frame = image_stream.get_frame().copy()
-            if frame is not None:
-                leds_annotated = cam_image_processor.get_led_status(frame, True)
+            cip = image_stream.get_cip()
+            if cip is not None:
+                leds_annotated = cip.get_led_annotations()
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 time = strftime("%H:%M:%S", localtime())
                 leds = cv2.putText(leds_annotated, time, 
@@ -118,9 +129,9 @@ class MyHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.end_headers()
 
-            frame = image_stream.get_frame()
-            if frame is not None:
-                leds_status = cam_image_processor.get_led_status(frame, False)
+            cip = image_stream.get_cip()
+            if cip is not None:
+                leds_status = cip.get_led_json()
                 self.wfile.write(leds_status.encode('utf-8'))         
         else:
             self.send_response(404)
@@ -129,7 +140,7 @@ class MyHandler(BaseHTTPRequestHandler):
 
 # Funktion zum kontinuierlichen Aufnehmen von Bildern
 def capture_image():
-    global image_stream       
+    global image_stream      
    
     while True:
 
