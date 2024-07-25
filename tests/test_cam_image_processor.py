@@ -39,13 +39,16 @@ class TestCIP(unittest.TestCase):
 
             led_states_correct = True
 
-            for led in led_names:
+            if image_data != None or len(led_states) != 0: # if both are zero, we detected a faulty picture alright
+                for led in led_names:
 
-                print(f"Checking led {led} with color {led_states[led]} and expected color {image_data[led]}")
+                    print(f"Checking led {led} with color {led_states[led]} and expected color {image_data[led]}")
 
-                if led_states[led] != image_data[led]:
-                    led_states_correct = False
-                    break
+                    if led_states[led] != image_data[led]:
+                        led_states_correct = False
+                        break
+            else:
+                print("Successfully detected faulty picture.")
 
             self.assertTrue(led_states_correct)
 

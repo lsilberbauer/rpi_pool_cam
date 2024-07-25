@@ -3,6 +3,10 @@ import cv2
 from matplotlib import pyplot as plt
 import numpy as np
 import math
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel("DEBUG")
 
 def draw_rectangle(image, rectangle_origin, rectangle_size):
     color = (0, 255, 255) 
@@ -30,6 +34,7 @@ def get_led_color(img, origin, radius):
 class CamImageProcessor:
     def __init__(self, config, img):
         self.config = config
+        self.valid_image = True
 
         self.img = img
         self.lcd = crop_rectangle(img, self.config["lcd"]["rectangle_origin"], self.config["lcd"]["rectangle_size"])
@@ -40,17 +45,20 @@ class CamImageProcessor:
         contours, hierarchy = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if len(contours) != 1:
-            raise Exception("Multiple contours for LCD found, aborting.")
+            logger.error("Multiple contours for LCD found.")
+            self.valid_image = False
+        else:
+            peri = cv2.arcLength(contours[0], True)
+            approx = cv2.approxPolyDP(contours[0], 0.04 * peri, True)
 
-        peri = cv2.arcLength(contours[0], True)
-        approx = cv2.approxPolyDP(contours[0], 0.04 * peri, True)
-
-        lcd_offset = approx[0][0] - (17, 17)
-        offsetted_origin = tuple(map(sum, zip(self.config["leds"]["rectangle_origin"], lcd_offset)))
-        self.leds = crop_rectangle(img, offsetted_origin, self.config["leds"]["rectangle_size"])
+            lcd_offset = approx[0][0] - (17, 17)
+            offsetted_origin = tuple(map(sum, zip(self.config["leds"]["rectangle_origin"], lcd_offset)))
+            self.leds = crop_rectangle(img, offsetted_origin, self.config["leds"]["rectangle_size"])
 
     def get_led_dict(self):
-
+        if not self.valid_image:
+            return {}
+        
         led_states = {}
         for led in list(self.config["leds"].keys())[2:]:
             color = get_led_color(self.leds, self.config["leds"][led]["origin"], self.config["leds"][led]["radius"])
@@ -84,6 +92,8 @@ class CamImageProcessor:
         else: return ""
 
     def get_led_annotations(self):
+        if not self.valid_image:
+            return None
         
         annotated_leds = self.leds.copy()
         draw_rectangle(annotated_leds, self.config["leds"]["rectangle_origin"], self.config["leds"]["rectangle_size"])        
