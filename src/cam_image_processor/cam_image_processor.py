@@ -71,13 +71,13 @@ class CamImageProcessor:
             fill_level = 0
 
             if led_states["S1"]:
-                fill_level = 1
+                fill_level = 100
             elif led_states["S2"]:
-                fill_level = 0.75
+                fill_level = 75
             elif led_states["S3"]:
-                fill_level = 0.5
+                fill_level = 50
             elif led_states["S4"]:
-                fill_level = 0.25
+                fill_level = 25
 
             return f"{{ \"Valid\": \"True\", \"K1\": \"{led_states['K1']}\", \"K2\": \"{led_states['K2']}\", \"K3\": \"{led_states['K3']}\", \"Error\": \"{led_states['Error']}\", \"FillLevel\": \"{fill_level}\" }}"
 
