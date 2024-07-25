@@ -4,44 +4,34 @@ leds:
 
   K1:
     origin: [95, 12]
-    radius: 2
-    color: [78, 74, 161]
+    radius: 3
   K2:
     origin: [96, 25]
     radius: 3
-    color: [195, 217, 240]
   K3:
     origin: [96, 40]
     radius: 3
-    color: [66, 88, 142]
   S1:
     origin: [21, 15]
     radius: 5      
-    color: [153, 191, 176]
   S2:
     origin: [21, 30]
     radius: 5      
-    color: [153, 191, 176]
   S3:
     origin: [21, 44]
     radius: 5      
-    color: [153, 191, 176]
   S4:
     origin: [21, 58]
     radius: 5
-    color: [153, 191, 176]
   Status: 
     origin: [51, 62]
     radius: 5
-    color: [153, 191, 176]
   Error: 
     origin: [75, 60]
     radius: 3
-    color: [66, 88, 142]  
   Black:
     origin: [93, 60]
     radius: 8
-    color: [0 , 0 , 0]
 
 
 lcd:

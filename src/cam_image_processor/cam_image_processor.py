@@ -54,10 +54,10 @@ class CamImageProcessor:
         led_states = {}
         for led in list(self.config["leds"].keys())[2:]:
             color = get_led_color(self.leds, self.config["leds"][led]["origin"], self.config["leds"][led]["radius"])
-            euclidian_distance = math.dist(color, tuple(self.config["leds"][led]["color"]))
-            led_states[led] = True if euclidian_distance < 100 else False
+            color_sum = sum(tuple(color))
+            led_states[led] = True if color_sum > 50 else False
 
-        valid = True if led_states["Status"] and led_states["Black"] else False
+        valid = True if led_states["Status"] and not led_states["Black"] else False
 
         if valid:
             return led_states
