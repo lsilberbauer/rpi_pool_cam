@@ -16,6 +16,7 @@ Endpoints:
     GET /image.jpg          Full-resolution camera frame.
     GET /digital.jpg        Perspective-corrected (unwarped) LCD image.
     GET /lcd_digits.jpg     Grid visualisation of the eight digit ROIs.
+    GET /leds.jpg           Raw LED region crop (no annotation).
     GET /leds_annotated.jpg LED region with annotated circles.
     GET /leds.json          LED states and derived fill level as JSON.
 """
@@ -142,41 +143,53 @@ def capture_loop(stream: ImageStream, config: dict[str, Any], save_captures: boo
         stream.update(image, config)
 
         if save_captures:
-            _save_capture(image, stream.processor())
+            _save_capture(stream.processor())
 
         time.sleep(60)
 
 
-def _save_capture(frame: np.ndarray, processor: CamImageProcessor | None) -> None:
-    """Write the frame and a YAML stub to ``data/captured/``.
+def _save_capture(processor: CamImageProcessor | None) -> None:
+    """Write the unwarped LCD image and a YAML stub to ``data/captured/``.
 
-    The YAML stub contains auto-detected LED states (if available) and
-    empty ``PH`` and ``Redux`` fields for manual entry.
+    Saves only the perspective-corrected LCD crop (grayscale, ~44×106 px) rather
+    than the full frame.  This keeps disk usage to a few KB per capture instead
+    of ~1.4 MB, which is critical for long-running operation on a Raspberry Pi.
+
+    The YAML stub contains auto-detected LED states and empty ``PH``/``Redux``
+    fields for manual labelling.  If the processor is unavailable or LCD
+    unwarping fails, the capture is skipped and the error is logged — no fallback
+    to full-frame saving.
 
     Args:
-        frame: Full-resolution BGR camera frame.
-        processor: Processor built from the same frame, or None.
+        processor: Processor built from the current frame, or None.
     """
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    jpg_path = _CAPTURED_DIR / f"{timestamp}.jpg"
-    yaml_path = _CAPTURED_DIR / f"{timestamp}.yaml"
-
-    success, encoded = cv2.imencode(".jpg", frame)
-    if not success:
-        logger.error("Failed to encode captured frame as JPEG.")
+    if processor is None:
+        logger.error("Skipping capture save: processor not available.")
         return
 
-    jpg_path.write_bytes(encoded.tobytes())
+    try:
+        unwarped = processor.get_unwarped_lcd()
+    except RuntimeError:
+        logger.error("Skipping capture save: LCD unwarp failed.", exc_info=True)
+        return
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    png_path = _CAPTURED_DIR / f"{timestamp}.png"
+    yaml_path = _CAPTURED_DIR / f"{timestamp}.yaml"
+
+    success = cv2.imwrite(str(png_path), unwarped)
+    if not success:
+        logger.error("Failed to write unwarped LCD image: %s", png_path)
+        return
 
     led_states: dict[str, Any] = {}
-    if processor is not None:
-        led_dict = processor.get_led_dict()
-        if led_dict:
-            led_states = {k: bool(v) for k, v in led_dict.items()}
+    led_dict = processor.get_led_dict()
+    if led_dict:
+        led_states = {k: bool(v) for k, v in led_dict.items()}
 
     stub: dict[str, Any] = {**led_states, "PH": None, "Redux": None}
     yaml_path.write_text(yaml.dump(stub, default_flow_style=False))
-    logger.info("Saved capture: %s", timestamp)
+    logger.info("Saved capture: %s (unwarped LCD %dx%d)", timestamp, unwarped.shape[1], unwarped.shape[0])
 
 
 # ---------------------------------------------------------------------------
@@ -184,12 +197,13 @@ def _save_capture(frame: np.ndarray, processor: CamImageProcessor | None) -> Non
 # ---------------------------------------------------------------------------
 
 
-def create_app(stream: ImageStream) -> Flask:
+def create_app(stream: ImageStream, config: dict[str, Any]) -> Flask:
     """Create and configure the Flask application.
 
     Args:
         stream: Shared :class:`ImageStream` instance populated by the capture
             thread.
+        config: Parsed configuration dictionary from config.yaml.
 
     Returns:
         Configured Flask application.
@@ -235,10 +249,23 @@ def create_app(stream: ImageStream) -> Flask:
             logger.error("LCD unwarp failed: %s", exc)
             return Response(str(exc), status=422)
 
-        # Convert grayscale to BGR for consistent JPEG encoding
-        display = cv2.cvtColor(unwarped, cv2.COLOR_GRAY2BGR)
+        # Fit the unwarped LCD into a black canvas matching the LED crop dimensions
+        # so both images have identical resolution and timestamp style.
+        canvas_h: int = config["leds"]["rectangle_size"][1]
+        canvas_w: int = config["leds"]["rectangle_size"][0]
+        fit_scale = min(canvas_w / unwarped.shape[1], canvas_h / unwarped.shape[0])
+        new_w = int(unwarped.shape[1] * fit_scale)
+        new_h = int(unwarped.shape[0] * fit_scale)
+        resized = cv2.resize(unwarped, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+
+        canvas = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
+        y_off = (canvas_h - new_h) // 2
+        x_off = (canvas_w - new_w) // 2
+        canvas[y_off : y_off + new_h, x_off : x_off + new_w] = resized
+
+        display = cv2.cvtColor(canvas, cv2.COLOR_GRAY2BGR)
         timestamp = strftime("%H:%M:%S", localtime())
-        cv2.putText(display, timestamp, (2, unwarped.shape[0] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 200), 1)
+        cv2.putText(display, timestamp, (2, display.shape[0] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (210, 155, 155), 1)
         return _jpeg_response(display)
 
     @app.route("/lcd_digits.jpg")
@@ -266,6 +293,21 @@ def create_app(stream: ImageStream) -> Flask:
         grid_scaled = cv2.resize(grid, (grid.shape[1] * scale, grid.shape[0] * scale), interpolation=cv2.INTER_NEAREST)
         return _jpeg_response(cv2.cvtColor(grid_scaled, cv2.COLOR_GRAY2BGR))
 
+    @app.route("/leds.jpg")
+    def leds_raw() -> Response:
+        """Return the raw LED region crop with timestamp."""
+        frame = stream.frame()
+        if frame is None:
+            return Response("No frame available.", status=503)
+        origin = config["leds"]["rectangle_origin"]
+        size = config["leds"]["rectangle_size"]
+        x, y = origin[0], origin[1]
+        w, h = size[0], size[1]
+        crop = frame[y : y + h, x : x + w].copy()
+        timestamp = strftime("%H:%M:%S", localtime())
+        cv2.putText(crop, timestamp, (2, crop.shape[0] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (210, 155, 155), 1)
+        return _jpeg_response(crop)
+
     @app.route("/leds_annotated.jpg")
     def leds_annotated() -> Response:
         cip = stream.processor()
@@ -279,6 +321,7 @@ def create_app(stream: ImageStream) -> Flask:
         return _jpeg_response(annotated)
 
     @app.route("/leds.json")
+    @app.route("/leds_json")  # legacy alias — kept for Home Assistant compatibility
     def leds_json() -> Response:
         cip = stream.processor()
         if cip is None:
@@ -325,7 +368,7 @@ def main() -> None:
     capture_thread.start()
     logger.info("Capture thread started (save_captures=%s).", args.save_captures)
 
-    app = create_app(stream)
+    app = create_app(stream, config)
     logger.info("Serving on http://%s:%d", args.host, args.port)
     app.run(host=args.host, port=args.port, threaded=True)
 
