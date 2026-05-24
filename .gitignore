@@ -1,2 +1,5 @@
 __pycache__/
 *.py[cod]
+AGENTS.md
+data/live_test/
+data/captured/

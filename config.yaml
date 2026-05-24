@@ -38,3 +38,8 @@ lcd:
   rectangle_origin: [1827, 1142]
   rectangle_size: [140, 85]
   screen: [[10,15], [120,18], [120,60], [17,60]]
+  digits:
+    origin: [23, 3]
+    size: [12, 18]
+    num_cols: 4
+    num_rows: 2
