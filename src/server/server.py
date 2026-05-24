@@ -204,7 +204,7 @@ def create_app(stream: ImageStream) -> Flask:
         resp.headers.update(_NO_CACHE_HEADERS)
         return resp
 
-    @app.get("/")
+    @app.route("/")
     def index() -> Response:
         html = (
             "<html><body>"
@@ -216,14 +216,14 @@ def create_app(stream: ImageStream) -> Flask:
         )
         return Response(html, mimetype="text/html")
 
-    @app.get("/image.jpg")
+    @app.route("/image.jpg")
     def full_image() -> Response:
         frame = stream.frame()
         if frame is None:
             return Response("No frame available.", status=503)
         return _jpeg_response(frame)
 
-    @app.get("/digital.jpg")
+    @app.route("/digital.jpg")
     def digital() -> Response:
         """Return the perspective-corrected (unwarped) LCD as a JPEG."""
         cip = stream.processor()
@@ -241,7 +241,7 @@ def create_app(stream: ImageStream) -> Flask:
         cv2.putText(display, timestamp, (2, unwarped.shape[0] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 200), 1)
         return _jpeg_response(display)
 
-    @app.get("/lcd_digits.jpg")
+    @app.route("/lcd_digits.jpg")
     def lcd_digits() -> Response:
         """Return a grid image showing all eight digit ROIs side by side."""
         cip = stream.processor()
@@ -266,7 +266,7 @@ def create_app(stream: ImageStream) -> Flask:
         grid_scaled = cv2.resize(grid, (grid.shape[1] * scale, grid.shape[0] * scale), interpolation=cv2.INTER_NEAREST)
         return _jpeg_response(cv2.cvtColor(grid_scaled, cv2.COLOR_GRAY2BGR))
 
-    @app.get("/leds_annotated.jpg")
+    @app.route("/leds_annotated.jpg")
     def leds_annotated() -> Response:
         cip = stream.processor()
         if cip is None:
@@ -278,7 +278,7 @@ def create_app(stream: ImageStream) -> Flask:
         cv2.putText(annotated, timestamp, (2, annotated.shape[0] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (210, 155, 155), 1)
         return _jpeg_response(annotated)
 
-    @app.get("/leds.json")
+    @app.route("/leds.json")
     def leds_json() -> Response:
         cip = stream.processor()
         if cip is None:
