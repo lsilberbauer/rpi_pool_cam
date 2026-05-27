@@ -1,0 +1,9 @@
+# Training-only dependencies — not needed on the Raspberry Pi deployment target.
+# Install with: pip install -r requirements-train.txt
+-r requirements.txt
+torch
+torchvision
+onnx
+onnxscript
+tqdm
+Pillow

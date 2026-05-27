@@ -12,8 +12,8 @@ import numpy as np
 
 from src.cam_image_processor.lcd_detector import detect_and_unwarp, extract_digit_rois
 
-# Lazily loaded TorchScript CNN for digit classification (loaded once, shared across instances).
-_digit_model: Any = None
+# Lazily loaded ONNX inference session for digit classification (loaded once, shared across instances).
+_digit_session: Any = None
 
 logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
@@ -290,10 +290,11 @@ class CamImageProcessor:
         return annotated
 
     def get_ph_redux(self) -> tuple[float, int]:
-        """Classify the six digit ROIs with the TorchScript CNN and return (ph, redux).
+        """Classify the six digit ROIs with the ONNX CNN and return (ph, redux).
 
-        The model is loaded from ``models/digit_cnn.torchscript.pt`` (relative to the
-        project root) on the first call and cached for subsequent calls.
+        The onnxruntime InferenceSession is loaded from ``models/digit_cnn.onnx``
+        (relative to the project root) on the first call and cached for subsequent
+        calls.  No PyTorch dependency is required at runtime.
 
         ROI layout (indices into :meth:`get_digit_rois`):
             0 = PH integer,  1 = decimal dot (skipped),  2 = PH tenth,
@@ -305,18 +306,20 @@ class CamImageProcessor:
 
         Raises:
             RuntimeError: If the image is invalid or LCD unwarping fails.
-            FileNotFoundError: If the TorchScript model file is missing.
+            FileNotFoundError: If the ONNX model file is missing.
         """
-        global _digit_model
-        import torch  # deferred: not available in all environments
+        global _digit_session
+        import onnxruntime as ort  # deferred: not available in all environments
 
-        if _digit_model is None:
-            model_path = Path(__file__).parent.parent.parent / "models" / "digit_cnn.torchscript.pt"
+        if _digit_session is None:
+            model_path = Path(__file__).parent.parent.parent / "models" / "digit_cnn.onnx"
             if not model_path.exists():
-                raise FileNotFoundError(f"TorchScript digit model not found: {model_path}")
-            _digit_model = torch.jit.load(str(model_path), map_location="cpu")
-            _digit_model.eval()
-            logger.info("Loaded TorchScript digit model from %s", model_path)
+                raise FileNotFoundError(f"ONNX digit model not found: {model_path}")
+            _digit_session = ort.InferenceSession(
+                str(model_path),
+                providers=["CPUExecutionProvider"],
+            )
+            logger.info("Loaded ONNX digit model from %s", model_path)
 
         rois = self.get_digit_rois()  # raises RuntimeError if invalid
 
@@ -324,10 +327,9 @@ class CamImageProcessor:
         for i in (0, 2, 3, 5, 6, 7):  # skip dot (1) and separator (4)
             roi = rois[i].astype(np.float32) / 255.0
             roi = (roi - 0.5) / 0.5  # same normalisation as training
-            tensor = torch.from_numpy(roi[np.newaxis, np.newaxis])  # (1, 1, H, W)
-            with torch.no_grad():
-                logits = _digit_model(tensor)
-            digits.append(int(logits.argmax(dim=1).item()))
+            inp = roi[np.newaxis, np.newaxis]  # (1, 1, H, W)
+            logits = _digit_session.run(["logits"], {"image": inp})[0]
+            digits.append(int(logits.argmax()))
 
         # digits: [ph_int, ph_tenth, ph_hundredth, rx_hundreds, rx_tens, rx_ones]
         ph = round(digits[0] + digits[1] * 0.1 + digits[2] * 0.01, 2)

@@ -284,7 +284,8 @@ def main() -> None:
             input_names=["image"],
             output_names=["logits"],
             dynamic_axes={"image": {0: "batch"}, "logits": {0: "batch"}},
-            opset_version=14,
+            opset_version=12,  # opset 12: widely supported by onnxruntime on ARMv7
+            dynamo=False,      # use legacy TorchScript-based exporter
         )
         print(f"ONNX model        → {onnx_path.relative_to(ROOT)}")
     except Exception as e:
