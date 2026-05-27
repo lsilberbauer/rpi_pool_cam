@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Lukas Silberbauer. All rights reserved.
 
-"""Tests for CamImageProcessor LED detection against ground-truth data."""
+"""Tests for CamImageProcessor LED detection and digit inference against ground-truth data."""
 
 import cv2
 import pytest
@@ -36,4 +36,28 @@ def test_led_states_match_ground_truth(image_yaml_pair, config):
             f"LED '{led}' mismatch for {jpg_path}: "
             f"detected={led_states[led]}, expected={ground_truth[led]}"
         )
+
+
+def test_ph_redux_matches_ground_truth(image_yaml_pair, config):
+    """get_ph_redux() must return PH and Redux values matching the ground-truth YAML.
+
+    Skips images whose YAML has no PH/Redux labels (calibration frames).
+    """
+    ground_truth, jpg_path = image_yaml_pair
+
+    if ground_truth is None or "PH" not in ground_truth or "Redux" not in ground_truth:
+        pytest.skip("No PH/Redux ground truth for this image")
+
+    image = cv2.imread(str(jpg_path))
+    assert image is not None, f"Could not read image: {jpg_path}"
+
+    cip = CamImageProcessor(config, image)
+    ph, redux = cip.get_ph_redux()
+
+    assert ph == pytest.approx(ground_truth["PH"], abs=0.01), (
+        f"PH mismatch for {jpg_path}: detected={ph}, expected={ground_truth['PH']}"
+    )
+    assert redux == ground_truth["Redux"], (
+        f"Redux mismatch for {jpg_path}: detected={redux}, expected={ground_truth['Redux']}"
+    )
 

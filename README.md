@@ -10,11 +10,10 @@ A Raspberry Pi with a PiCamera photographs a pool dosing unit display and a led 
 
 The captured image is processed on-device to:
 
-- **Read the LCD display** — perspective-correct the display and extract eight individual digit crops for later classification.
+- **Read the LCD display** — perspective-correct the display, extract eight digit crops, and classify them with a CNN to read the PH and Redux values.
 - **Read LED status** — detect which indicator LEDs are active to determine pump state, fill level, and error status.
 
-The LED states are exposed via a JSON endpoint that can be polled by Home Assistant.
-The digit crops are saved on disk to build a labelled dataset for training a digit classification model.
+All results are exposed via a JSON endpoint that can be polled by Home Assistant.
 
 ---
 
@@ -57,9 +56,20 @@ PiCamera (1 fps, 2592×1952)
 ```
 rpi_pool_cam/
 ├── config.yaml                      camera ROI and digit grid configuration
-├── requirements.txt
+├── requirements.txt                 runtime dependencies (Pi)
+├── requirements-train.txt           training-only dependencies (PyTorch, etc.)
+├── setup_pi.sh                      one-time Pi setup script (installs onnxruntime)
+├── models/
+│   ├── digit_cnn.onnx               runtime inference model (ONNX, opset 12)
+│   ├── digit_cnn_best.pt            PyTorch weights (training artefact, not used on Pi)
+│   └── digit_cnn.torchscript.pt     superseded TorchScript export (not used on Pi)
 ├── data/                            labelled test images + ground-truth YAMLs
 │   └── captured/                    auto-saved captures (--save-captures mode)
+├── scripts/
+│   ├── train_cnn.py                 train the digit CNN
+│   ├── export_onnx.py               export trained model to ONNX
+│   ├── build_dataset.py             assemble digit crops into a dataset
+│   └── annotate_captures.py         annotate capture YAMLs with PH/Redux labels
 ├── src/
 │   ├── cam_image_processor/
 │   │   ├── cam_image_processor.py   CamImageProcessor class
@@ -68,7 +78,7 @@ rpi_pool_cam/
 │       └── server.py                Flask web server
 ├── tests/
 │   ├── conftest.py                  shared pytest fixtures
-│   ├── test_cam_image_processor.py  LED detection tests
+│   ├── test_cam_image_processor.py  LED detection + PH/Redux inference tests
 │   └── test_lcd_detector.py         LCD unwarp and digit ROI tests
 └── jupyter/
     ├── lcd_digit_extraction.ipynb   batch digit extraction for training data
@@ -78,6 +88,15 @@ rpi_pool_cam/
 ---
 
 ## Setup
+
+**Raspberry Pi (ARMv7)** — `onnxruntime` has no official PyPI wheel for ARMv7; use the
+provided setup script which installs the community-built wheel first:
+
+```bash
+bash setup_pi.sh
+```
+
+**All other platforms:**
 
 ```bash
 pip install -r requirements.txt
@@ -118,18 +137,43 @@ Each saved capture produces:
 Example `/leds.json` response:
 
 ```json
-{"Valid": "True", "K1": "True", "K2": "True", "K3": "False", "Error": "False", "FillLevel": "75"}
+{
+  "Valid": "True",
+  "Overexposed": "False",
+  "K1": "True",
+  "K2": "True",
+  "K3": "False",
+  "Error": "False",
+  "FillLevel": "75",
+  "PH": 7.16,
+  "Redux": 790,
+  "PHReduxAccepted": "True"
+}
 ```
+
+`PH` and `Redux` are `null` when inference fails or the image is invalid.
+`PHReduxAccepted` reflects whether the reading passed the plausibility filter
+(sanity-bounds + max-step check between consecutive readings).
 
 ---
 
-## Building the Training Dataset
+## Digit Classification Model
+
+PH and Redux are read by a small CNN (`models/digit_cnn.onnx`) that classifies
+each of the six relevant digit ROIs (0–9) extracted from the unwarped LCD image.
+Inference runs via `onnxruntime` — no PyTorch required on the Pi.
+
+### Retraining the model
 
 1. Run the server with `--save-captures` for several days to collect diverse images.
-2. Manually fill in the `PH` and `Redux` fields in each generated YAML stub.
-3. Open `jupyter/lcd_digit_extraction.ipynb` and run all cells — it reads every labelled
-   JPEG + YAML pair and saves individual digit crops to `data/digits/{0-9}/`.
-4. Use the collected crops to train a digit classification model.
+2. Manually fill in the `PH` and `Redux` fields in each generated YAML stub
+   (or use `scripts/annotate_captures.py`).
+3. Run `scripts/build_dataset.py` — reads every labelled JPEG + YAML pair and
+   saves individual digit crops to `data/digits/{0-9}/`.
+4. Install training dependencies: `pip install -r requirements-train.txt`
+5. Train: `python scripts/train_cnn.py` → saves `models/digit_cnn_best.pt`
+6. Export to ONNX: `python scripts/export_onnx.py` → saves `models/digit_cnn.onnx`
+7. Copy `digit_cnn.onnx` to the Pi and run `pytest tests/ -v` to verify.
 
 ---
 
