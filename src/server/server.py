@@ -18,13 +18,14 @@ Endpoints:
     GET /lcd_digits.jpg     Grid visualisation of the eight digit ROIs.
     GET /leds.jpg           Raw LED region crop (no annotation).
     GET /leds_annotated.jpg LED region with annotated circles.
-    GET /leds.json          LED states and derived fill level as JSON.
+    GET /leds.json          LED states, fill level, PH, Redux and overexposure state as JSON.
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import logging
 import threading
 import time
@@ -53,6 +54,64 @@ _NO_CACHE_HEADERS = {
     "Cache-Control": "no-store, must-revalidate",
     "Expires": "0",
 }
+
+
+# ---------------------------------------------------------------------------
+# Pool-value plausibility filter
+# ---------------------------------------------------------------------------
+
+
+class PoolValueFilter:
+    """Reject CNN digit readings that deviate implausibly from the previous accepted value.
+
+    Pool chemistry changes very gradually (PH ~0.02/reading, Redux ~2/reading at
+    1-minute capture intervals).  A sudden large jump almost certainly signals a
+    digit misclassification rather than a genuine chemical change.
+
+    After a long gap (overexposed period, server restart) the rate filter is
+    bypassed and only the absolute range check applies, because we genuinely
+    do not know how much the values drifted while the image was unreadable.
+    """
+
+    MAX_PH_STEP: float = 0.5    # generous cap on PH change between consecutive 1-min readings
+    MAX_RX_STEP: int = 50       # generous cap on Redux change
+    MAX_GAP_SEC: float = 300.0  # skip rate check if last accepted reading is older than this
+    PH_MIN, PH_MAX = 5.0, 10.0  # absolute sanity bounds
+    RX_MIN, RX_MAX = 0, 999
+
+    def __init__(self) -> None:
+        self._ph: float | None = None
+        self._rx: int | None = None
+        self._ts: datetime.datetime | None = None
+
+    def accept(self, ph: float, redux: int, ts: datetime.datetime | None = None) -> bool:
+        """Return True (and update history) if the reading passes all checks."""
+        ts = ts or datetime.datetime.now()
+
+        if not (self.PH_MIN <= ph <= self.PH_MAX) or not (self.RX_MIN <= redux <= self.RX_MAX):
+            logger.warning("PoolFilter: out-of-range reading ph=%.2f redux=%d — rejected", ph, redux)
+            return False
+
+        if self._ts is not None:
+            gap = (ts - self._ts).total_seconds()
+            if gap <= self.MAX_GAP_SEC:
+                if abs(ph - self._ph) > self.MAX_PH_STEP:  # type: ignore[operator]
+                    logger.warning("PoolFilter: PH spike %.2f → %.2f rejected", self._ph, ph)
+                    return False
+                if abs(redux - self._rx) > self.MAX_RX_STEP:  # type: ignore[operator]
+                    logger.warning("PoolFilter: Redux spike %d → %d rejected", self._rx, redux)
+                    return False
+
+        self._ph, self._rx, self._ts = ph, redux, ts
+        return True
+
+    @property
+    def last_ph(self) -> float | None:
+        return self._ph
+
+    @property
+    def last_rx(self) -> int | None:
+        return self._rx
 
 # ---------------------------------------------------------------------------
 # Image stream — thread-safe frame + processor store
@@ -209,6 +268,7 @@ def create_app(stream: ImageStream, config: dict[str, Any]) -> Flask:
         Configured Flask application.
     """
     app = Flask(__name__)
+    pool_filter = PoolValueFilter()
 
     def _jpeg_response(image: np.ndarray) -> Response:
         success, encoded = cv2.imencode(".jpg", image)
@@ -326,10 +386,47 @@ def create_app(stream: ImageStream, config: dict[str, Any]) -> Flask:
         cip = stream.processor()
         if cip is None:
             return Response("No frame available.", status=503)
-        led_json = cip.get_led_json()
-        if not led_json:
-            return Response("{}", mimetype="application/json", headers=_NO_CACHE_HEADERS)
-        resp = Response(led_json, mimetype="application/json")
+
+        overexposed: bool = getattr(cip, "overexposed", False)
+        led_states = cip.get_led_dict()
+        valid = bool(led_states)
+
+        fill_level = 0
+        if led_states.get("S1"):
+            fill_level = 100
+        elif led_states.get("S2"):
+            fill_level = 75
+        elif led_states.get("S3"):
+            fill_level = 50
+        elif led_states.get("S4"):
+            fill_level = 25
+
+        payload: dict[str, Any] = {
+            "Valid": str(valid),
+            "Overexposed": str(overexposed),
+            "K1": str(led_states.get("K1", False)),
+            "K2": str(led_states.get("K2", False)),
+            "K3": str(led_states.get("K3", False)),
+            "Error": str(led_states.get("Error", False)),
+            "FillLevel": str(fill_level),
+            "PH": None,
+            "Redux": None,
+            "PHReduxAccepted": "False",
+        }
+
+        if cip.valid_image:
+            try:
+                ph, redux = cip.get_ph_redux()
+                accepted = pool_filter.accept(ph, redux)
+                payload["PH"] = ph
+                payload["Redux"] = redux
+                payload["PHReduxAccepted"] = str(accepted)
+                if not accepted:
+                    logger.info("leds.json: CNN read ph=%.2f redux=%d but filter rejected it", ph, redux)
+            except Exception as exc:
+                logger.warning("leds.json: digit CNN inference failed: %s", exc)
+
+        resp = Response(json.dumps(payload), mimetype="application/json")
         resp.headers.update(_NO_CACHE_HEADERS)
         return resp
 

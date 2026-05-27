@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 
 from src.cam_image_processor.lcd_detector import detect_and_unwarp, extract_digit_rois
+
+# Lazily loaded TorchScript CNN for digit classification (loaded once, shared across instances).
+_digit_model: Any = None
 
 logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
@@ -116,11 +120,13 @@ class CamImageProcessor:
     def __init__(self, config: dict[str, Any], img: np.ndarray) -> None:
         self.config = config
         self.valid_image = True
+        self.overexposed = False
 
         self.img = img
         self._lcd_gray: np.ndarray | None = None
         self._unwarped_lcd: np.ndarray | None = None
         self._lcd_quad: np.ndarray | None = None
+        self._leds: np.ndarray | None = None
 
         # Crop the coarse LCD region as configured
         lcd_crop = crop_rectangle(
@@ -131,6 +137,17 @@ class CamImageProcessor:
 
         # --- LED region anchor correction (existing mechanism, unchanged) ---
         gray = cv2.cvtColor(lcd_crop, cv2.COLOR_BGR2GRAY)
+
+        # Detect overexposure before contour analysis (cellar light on → all pixels white).
+        # approxPolyDP may still find a contour on a uniformly bright crop, but the
+        # unwarped image would be meaningless, so we bail out early.
+        if (gray > 240).mean() > 0.5:
+            logger.warning("LCD crop is overexposed (%.0f%% bright pixels) — skipping processing.",
+                           (gray > 240).mean() * 100)
+            self.overexposed = True
+            self.valid_image = False
+            return
+
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         thresh = cv2.threshold(blurred, 60, 255, cv2.THRESH_BINARY)[1]
         contours, _ = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -138,7 +155,6 @@ class CamImageProcessor:
         if len(contours) != 1:
             logger.error("Expected exactly 1 LCD contour, found %d. Marking image invalid.", len(contours))
             self.valid_image = False
-            self._leds: np.ndarray | None = None
             return
 
         perimeter = cv2.arcLength(contours[0], True)
@@ -272,3 +288,48 @@ class CamImageProcessor:
                 (200, 0, 200),
             )
         return annotated
+
+    def get_ph_redux(self) -> tuple[float, int]:
+        """Classify the six digit ROIs with the TorchScript CNN and return (ph, redux).
+
+        The model is loaded from ``models/digit_cnn.torchscript.pt`` (relative to the
+        project root) on the first call and cached for subsequent calls.
+
+        ROI layout (indices into :meth:`get_digit_rois`):
+            0 = PH integer,  1 = decimal dot (skipped),  2 = PH tenth,
+            3 = PH hundredth,  4 = separator (skipped),  5 = Redux hundreds,
+            6 = Redux tens,  7 = Redux ones.
+
+        Returns:
+            ``(ph, redux)`` — e.g. ``(7.16, 796)``.
+
+        Raises:
+            RuntimeError: If the image is invalid or LCD unwarping fails.
+            FileNotFoundError: If the TorchScript model file is missing.
+        """
+        global _digit_model
+        import torch  # deferred: not available in all environments
+
+        if _digit_model is None:
+            model_path = Path(__file__).parent.parent.parent / "models" / "digit_cnn.torchscript.pt"
+            if not model_path.exists():
+                raise FileNotFoundError(f"TorchScript digit model not found: {model_path}")
+            _digit_model = torch.jit.load(str(model_path), map_location="cpu")
+            _digit_model.eval()
+            logger.info("Loaded TorchScript digit model from %s", model_path)
+
+        rois = self.get_digit_rois()  # raises RuntimeError if invalid
+
+        digits: list[int] = []
+        for i in (0, 2, 3, 5, 6, 7):  # skip dot (1) and separator (4)
+            roi = rois[i].astype(np.float32) / 255.0
+            roi = (roi - 0.5) / 0.5  # same normalisation as training
+            tensor = torch.from_numpy(roi[np.newaxis, np.newaxis])  # (1, 1, H, W)
+            with torch.no_grad():
+                logits = _digit_model(tensor)
+            digits.append(int(logits.argmax(dim=1).item()))
+
+        # digits: [ph_int, ph_tenth, ph_hundredth, rx_hundreds, rx_tens, rx_ones]
+        ph = round(digits[0] + digits[1] * 0.1 + digits[2] * 0.01, 2)
+        redux = digits[3] * 100 + digits[4] * 10 + digits[5]
+        return ph, redux
