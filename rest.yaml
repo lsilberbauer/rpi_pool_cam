@@ -1,0 +1,45 @@
+  - resource: http://pooltechnik.fritz.box:8000/leds_json
+    scan_interval: 60
+    sensor:
+      - name: Pooltechnik Schwallbehalter
+        unique_id: pooltechnik_schwallbehalter
+        state_class: measurement
+        device_class: battery
+        unit_of_measurement: "%"
+        value_template: "{{ value_json.FillLevel }}"
+        availability: "{{ value_json.Valid }}"
+      - name: Pooltechnik PH
+        unique_id: pooltechnik_ph
+        state_class: measurement
+        device_class: ph
+        unit_of_measurement: "pH"
+        value_template: "{{ value_json.PH }}"
+        availability: "{{ value_json.PHReduxAccepted == 'True' }}"
+      - name: Pooltechnik Redux
+        unique_id: pooltechnik_redux
+        state_class: measurement
+        device_class: voltage
+        unit_of_measurement: "mV"
+        value_template: "{{ value_json.Redux }}"
+        availability: "{{ value_json.PHReduxAccepted == 'True' }}"
+    binary_sensor:
+      - name: Pooltechnik Pumpenfreigabe ok
+        unique_id: pooltechnik_pumpenfreigabe_ok
+        value_template: "{{ value_json.K1 }}"
+        availability: "{{ value_json.Valid }}"
+      - name: Pooltechnik Zwangs-Ein
+        unique_id: pooltechnik_zwangs-ein
+        value_template: "{{ value_json.K2 }}"
+        availability: "{{ value_json.Valid }}"
+      - name: Pooltechnik Nachfullen
+        unique_id: pooltechnik_nachfullen
+        value_template: "{{ value_json.K3 }}"
+        availability: "{{ value_json.Valid }}"
+      - name: Pooltechnik Fehler
+        unique_id: pooltechnik_fehler
+        value_template: "{{ value_json.Error }}"
+        availability: "{{ value_json.Valid }}"
+      - name: Pooltechnik Lights
+        unique_id: pooltechnik_lights
+        device_class: light
+        value_template: "{{ value_json.Overexposed }}"
