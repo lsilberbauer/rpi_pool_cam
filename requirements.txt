@@ -5,3 +5,4 @@ numpy
 pytest
 flask
 onnxruntime
+requests

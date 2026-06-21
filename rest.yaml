@@ -39,7 +39,7 @@
         unique_id: pooltechnik_fehler
         value_template: "{{ value_json.Error }}"
         availability: "{{ value_json.Valid }}"
-      - name: Pooltechnik Lights
+      - name: Pooltechnik Licht
         unique_id: pooltechnik_lights
         device_class: light
         value_template: "{{ value_json.Overexposed }}"

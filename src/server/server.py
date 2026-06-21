@@ -19,14 +19,19 @@ Endpoints:
     GET /leds.jpg           Raw LED region crop (no annotation).
     GET /leds_annotated.jpg LED region with annotated circles.
     GET /leds.json          LED states, fill level, PH, Redux and overexposure state as JSON.
+    GET /history.json       Last N raw CNN readings + their accepted/rejected status.
+    GET /chart.png          Time-series chart of raw vs filtered PH and Redux.
 """
 
 from __future__ import annotations
 
 import argparse
+import collections
 import datetime
+import io
 import json
 import logging
+import statistics
 import threading
 import time
 from pathlib import Path
@@ -57,61 +62,139 @@ _NO_CACHE_HEADERS = {
 
 
 # ---------------------------------------------------------------------------
-# Pool-value plausibility filter
+# Pool-value plausibility filter — rolling-median spike rejection
 # ---------------------------------------------------------------------------
 
 
 class PoolValueFilter:
-    """Reject CNN digit readings that deviate implausibly from the previous accepted value.
+    """Reject CNN digit readings that are isolated spikes relative to recent history.
 
-    Pool chemistry changes very gradually (PH ~0.02/reading, Redux ~2/reading at
-    1-minute capture intervals).  A sudden large jump almost certainly signals a
-    digit misclassification rather than a genuine chemical change.
+    Uses the same principle as the annotation cleaner: each new reading is
+    compared against the median of the last ``WINDOW`` *accepted* readings.
+    A single-frame spike (e.g. from a superimposed-digit exposure artifact) will
+    deviate far from that median and be rejected.  Genuine gradual chemistry
+    changes move slowly enough that each accepted step is small and the rolling
+    median tracks them correctly.
 
-    After a long gap (overexposed period, server restart) the rate filter is
-    bypassed and only the absolute range check applies, because we genuinely
-    do not know how much the values drifted while the image was unreadable.
+    Every call to :meth:`update` records one raw reading (accepted or not).
+    Use :meth:`history` to retrieve the full log for the chart endpoint.
     """
 
-    MAX_PH_STEP: float = 0.5    # generous cap on PH change between consecutive 1-min readings
-    MAX_RX_STEP: int = 50       # generous cap on Redux change
-    MAX_GAP_SEC: float = 300.0  # skip rate check if last accepted reading is older than this
-    PH_MIN, PH_MAX = 5.0, 10.0  # absolute sanity bounds
+    WINDOW: int = 5           # number of accepted readings for the rolling median
+    MAX_GAP_SEC: float = 600  # reset window after a gap longer than this
+    PH_MIN, PH_MAX = 5.0, 10.0
     RX_MIN, RX_MAX = 0, 999
+    # Spike thresholds — must catch OCR errors (Δ≥0.3 pH, Δ≥20 Redux)
+    # while tracking genuine gradual chemistry changes (≤0.08 pH/min, ≤5 Redux/min)
+    PH_SPIKE: float = 0.20    # max deviation from rolling median before rejection
+    RX_SPIKE: int   = 35      # max deviation from rolling median before rejection
+    # History kept for charting
+    MAX_HISTORY: int = 1440   # ~24 h at 1 reading/min
 
     def __init__(self) -> None:
-        self._ph: float | None = None
-        self._rx: int | None = None
-        self._ts: datetime.datetime | None = None
+        # Rolling buffer of accepted (ph, rx, ts) for median computation
+        self._accepted: collections.deque[tuple[float, int, datetime.datetime]] = \
+            collections.deque(maxlen=self.WINDOW)
+        # Full log: each entry is a dict with keys ts, ph_raw, rx_raw, ph_filtered,
+        # rx_filtered, accepted (bool)
+        self._history: collections.deque[dict] = \
+            collections.deque(maxlen=self.MAX_HISTORY)
+        self._lock = threading.Lock()
 
-    def accept(self, ph: float, redux: int, ts: datetime.datetime | None = None) -> bool:
-        """Return True (and update history) if the reading passes all checks."""
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
+    def update(self, ph: float, redux: int,
+               ts: datetime.datetime | None = None) -> bool:
+        """Record a new CNN reading; return True if it passes the filter."""
         ts = ts or datetime.datetime.now()
 
-        if not (self.PH_MIN <= ph <= self.PH_MAX) or not (self.RX_MIN <= redux <= self.RX_MAX):
-            logger.warning("PoolFilter: out-of-range reading ph=%.2f redux=%d — rejected", ph, redux)
+        # Absolute range check first
+        if not (self.PH_MIN <= ph <= self.PH_MAX) or \
+           not (self.RX_MIN <= redux <= self.RX_MAX):
+            logger.warning("PoolFilter: out-of-range ph=%.2f rx=%d — rejected", ph, redux)
+            self._record(ts, ph, redux, accepted=False)
             return False
 
-        if self._ts is not None:
-            gap = (ts - self._ts).total_seconds()
-            if gap <= self.MAX_GAP_SEC:
-                if abs(ph - self._ph) > self.MAX_PH_STEP:  # type: ignore[operator]
-                    logger.warning("PoolFilter: PH spike %.2f → %.2f rejected", self._ph, ph)
-                    return False
-                if abs(redux - self._rx) > self.MAX_RX_STEP:  # type: ignore[operator]
-                    logger.warning("PoolFilter: Redux spike %d → %d rejected", self._rx, redux)
-                    return False
+        with self._lock:
+            accepted = self._spike_check(ph, redux, ts)
+            ph_f, rx_f = self._filtered_values()
+            if accepted:
+                self._accepted.append((ph, redux, ts))
+                ph_f, rx_f = ph, redux
 
-        self._ph, self._rx, self._ts = ph, redux, ts
-        return True
+        self._record(ts, ph, redux, accepted=accepted, ph_f=ph_f, rx_f=rx_f)
+        if not accepted:
+            logger.info(
+                "PoolFilter: spike rejected ph=%.2f rx=%d (median ph=%.2f rx=%d)",
+                ph, redux, ph_f if ph_f is not None else float("nan"),
+                rx_f if rx_f is not None else -1,
+            )
+        return accepted
 
     @property
     def last_ph(self) -> float | None:
-        return self._ph
+        with self._lock:
+            return self._accepted[-1][0] if self._accepted else None
 
     @property
     def last_rx(self) -> int | None:
-        return self._rx
+        with self._lock:
+            return self._accepted[-1][1] if self._accepted else None
+
+    def history(self, n: int | None = None) -> list[dict]:
+        """Return the last *n* recorded readings (or all if n is None)."""
+        items = list(self._history)
+        return items[-n:] if n is not None else items
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _spike_check(self, ph: float, redux: int,
+                     ts: datetime.datetime) -> bool:
+        """Return True if the reading passes the spike test."""
+        if not self._accepted:
+            return True   # no history yet — accept unconditionally
+
+        # Check for time gap: if last accepted reading is old, reset
+        last_ts = self._accepted[-1][2]
+        if (ts - last_ts).total_seconds() > self.MAX_GAP_SEC:
+            self._accepted.clear()
+            return True
+
+        ph_vals  = [a[0] for a in self._accepted]
+        rx_vals  = [a[1] for a in self._accepted]
+        med_ph   = statistics.median(ph_vals)
+        med_rx   = statistics.median(rx_vals)
+
+        if abs(ph - med_ph) > self.PH_SPIKE:
+            logger.debug("PoolFilter: PH spike %.2f vs median %.2f", ph, med_ph)
+            return False
+        if abs(redux - med_rx) > self.RX_SPIKE:
+            logger.debug("PoolFilter: Rx spike %d vs median %.0f", redux, med_rx)
+            return False
+        return True
+
+    def _filtered_values(self) -> tuple[float | None, int | None]:
+        """Return the last accepted ph/rx (for charting rejected readings)."""
+        if not self._accepted:
+            return None, None
+        return self._accepted[-1][0], self._accepted[-1][1]
+
+    def _record(self, ts: datetime.datetime, ph: float, redux: int,
+                accepted: bool,
+                ph_f: float | None = None,
+                rx_f: int | None = None) -> None:
+        self._history.append({
+            "ts":          ts.isoformat(timespec="seconds"),
+            "ph_raw":      ph,
+            "rx_raw":      redux,
+            "ph_filtered": ph_f,
+            "rx_filtered": rx_f,
+            "accepted":    accepted,
+        })
 
 # ---------------------------------------------------------------------------
 # Image stream — thread-safe frame + processor store
@@ -286,6 +369,9 @@ def create_app(stream: ImageStream, config: dict[str, Any]) -> Flask:
             '<img src="/digital.jpg"><br>'
             '<img src="/lcd_digits.jpg"><br>'
             '<img src="/leds_annotated.jpg"><br>'
+            '<p><a href="/chart.png">📈 PH/Redux chart (raw vs filtered)</a></p>'
+            '<img src="/chart.png" style="max-width:100%"><br>'
+            '<p><a href="/history.json">history.json</a></p>'
             "</body></html>"
         )
         return Response(html, mimetype="text/html")
@@ -417,7 +503,7 @@ def create_app(stream: ImageStream, config: dict[str, Any]) -> Flask:
         if cip.valid_image:
             try:
                 ph, redux = cip.get_ph_redux()
-                accepted = pool_filter.accept(ph, redux)
+                accepted = pool_filter.update(ph, redux)
                 payload["PH"] = ph
                 payload["Redux"] = redux
                 payload["PHReduxAccepted"] = str(accepted)
@@ -429,6 +515,103 @@ def create_app(stream: ImageStream, config: dict[str, Any]) -> Flask:
         resp = Response(json.dumps(payload), mimetype="application/json")
         resp.headers.update(_NO_CACHE_HEADERS)
         return resp
+
+    @app.route("/history.json")
+    def history_json() -> Response:
+        """Return the last 60 raw + filtered readings as JSON."""
+        data = pool_filter.history(n=60)
+        resp = Response(json.dumps(data), mimetype="application/json")
+        resp.headers.update(_NO_CACHE_HEADERS)
+        return resp
+
+    @app.route("/chart.png")
+    def chart_png() -> Response:
+        """Return a PNG time-series chart: raw CNN output vs filtered output."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+
+        data = pool_filter.history()
+        if not data:
+            # Return a blank 1×1 PNG
+            buf = io.BytesIO()
+            plt.figure(figsize=(1, 1))
+            plt.savefig(buf, format="png")
+            plt.close()
+            buf.seek(0)
+            return Response(buf.read(), mimetype="image/png",
+                            headers=_NO_CACHE_HEADERS)
+
+        ts       = [datetime.datetime.fromisoformat(d["ts"]) for d in data]
+        ph_raw   = [d["ph_raw"]      for d in data]
+        rx_raw   = [d["rx_raw"]      for d in data]
+        ph_filt  = [d["ph_filtered"] for d in data]
+        rx_filt  = [d["rx_filtered"] for d in data]
+        accepted = [d["accepted"]    for d in data]
+
+        # Split into accepted / rejected for scatter
+        ts_acc = [t for t, a in zip(ts, accepted) if a]
+        ph_acc = [v for v, a in zip(ph_raw, accepted) if a]
+        rx_acc = [v for v, a in zip(rx_raw, accepted) if a]
+        ts_rej = [t for t, a in zip(ts, accepted) if not a]
+        ph_rej = [v for v, a in zip(ph_raw, accepted) if not a]
+        rx_rej = [v for v, a in zip(rx_raw, accepted) if not a]
+
+        # Filtered line (skip None)
+        ts_f  = [t for t, v in zip(ts, ph_filt) if v is not None]
+        ph_f  = [v for v in ph_filt  if v is not None]
+        rx_f  = [v for v in rx_filt  if v is not None]
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+        fig.patch.set_facecolor("#1e1e2e")
+        for ax in (ax1, ax2):
+            ax.set_facecolor("#1e1e2e")
+            ax.tick_params(colors="white")
+            ax.xaxis.label.set_color("white")
+            ax.yaxis.label.set_color("white")
+            ax.title.set_color("white")
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#444466")
+
+        # PH panel
+        ax1.scatter(ts_acc, ph_acc, s=6, color="#6688cc", alpha=0.5, label="raw (accepted)", zorder=2)
+        ax1.scatter(ts_rej, ph_rej, s=20, color="#ff4444", marker="x", linewidths=1.2,
+                    label="raw (rejected)", zorder=3)
+        if ts_f:
+            ax1.plot(ts_f, ph_f, color="#88ddff", linewidth=1.5, label="filtered", zorder=4)
+        ax1.set_ylabel("pH", color="white")
+        ax1.legend(fontsize=8, facecolor="#2a2a3e", labelcolor="white",
+                   loc="upper left", framealpha=0.7)
+        ax1.grid(color="#333355", linewidth=0.5)
+        if ph_acc:
+            ax1.set_ylim(min(ph_acc) - 0.15, max(ph_acc) + 0.15)
+
+        # Redux panel
+        ax2.scatter(ts_acc, rx_acc, s=6, color="#66bb88", alpha=0.5, label="raw (accepted)", zorder=2)
+        ax2.scatter(ts_rej, rx_rej, s=20, color="#ff4444", marker="x", linewidths=1.2,
+                    label="raw (rejected)", zorder=3)
+        if ts_f:
+            ax2.plot(ts_f, rx_f, color="#aaffcc", linewidth=1.5, label="filtered", zorder=4)
+        ax2.set_ylabel("Redux (mV)", color="white")
+        ax2.legend(fontsize=8, facecolor="#2a2a3e", labelcolor="white",
+                   loc="upper left", framealpha=0.7)
+        ax2.grid(color="#333355", linewidth=0.5)
+        if rx_acc:
+            ax2.set_ylim(min(rx_acc) - 10, max(rx_acc) + 10)
+
+        ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
+        fig.autofmt_xdate(rotation=30)
+        fig.suptitle("Pool chemistry — raw CNN vs filtered", color="white", fontsize=11)
+        fig.tight_layout()
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=110, facecolor=fig.get_facecolor())
+        plt.close(fig)
+        buf.seek(0)
+        return Response(buf.read(), mimetype="image/png",
+                        headers=_NO_CACHE_HEADERS)
 
     return app
 

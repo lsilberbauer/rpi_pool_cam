@@ -3,3 +3,8 @@ __pycache__/
 AGENTS.md
 data/live_test/
 data/captured/
+data/dataset/
+data/dataset_balanced/
+results/
+models/digit_cnn.onnx.data
+
