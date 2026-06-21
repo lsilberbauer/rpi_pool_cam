@@ -437,10 +437,14 @@ def main() -> None:
 
     onnx_path = MODELS_DIR / "digit_cnn.onnx"
     try:
+        # opset_version=11 → IR version 6, supported by all onnxruntime builds
+        # including old RPi packages.  dynamo=False forces the legacy
+        # TorchScript-based exporter which produces a single self-contained file.
         torch.onnx.export(
             model, dummy, str(onnx_path),
             input_names=["image"], output_names=["logits"],
-            opset_version=17,
+            opset_version=11,
+            dynamo=False,
         )
         print(f"ONNX        → {onnx_path.relative_to(ROOT)}")
     except Exception as e:
