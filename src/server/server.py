@@ -86,8 +86,11 @@ class PoolValueFilter:
     RX_MIN, RX_MAX = 0, 999
     # Spike thresholds — must catch OCR errors (Δ≥0.3 pH, Δ≥20 Redux)
     # while tracking genuine gradual chemistry changes (≤0.08 pH/min, ≤5 Redux/min)
-    PH_SPIKE: float = 0.20    # max deviation from rolling median before rejection
-    RX_SPIKE: int   = 35      # max deviation from rolling median before rejection
+    # Tightened from production data replay:
+    #   PH p99 step ~= 0.042/min, RX p99 step ~= 4.23/min
+    # so these still leave headroom while rejecting OCR spike jumps.
+    PH_SPIKE: float = 0.10    # max deviation from rolling median before rejection
+    RX_SPIKE: int   = 15      # max deviation from rolling median before rejection
     # History kept for charting
     MAX_HISTORY: int = 1440   # ~24 h at 1 reading/min
 

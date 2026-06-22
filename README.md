@@ -136,13 +136,22 @@ Example `/leds.json` response:
 
 ## Spike Filter
 
-`PoolValueFilter` in `server.py` keeps a rolling window of the last 5 accepted readings and rejects any new reading that deviates more than **0.20 pH** or **35 mV** from their median. This catches:
+`PoolValueFilter` in `server.py` keeps a rolling window of the last 5 accepted readings and rejects any new reading that deviates more than **0.10 pH** or **15 mV** from their median. This catches:
 
 - Digit superimposition during LCD transitions (e.g. Redux reading of 296 instead of 796)
 - Partial LCD updates where one digit has not yet settled
 - Random CNN misclassifications on borderline images
 
-Genuine chemistry changes (e.g. acid dosing) are typically ≤0.05 pH/min, so they accumulate gradually through the filter rather than being rejected.
+Genuine chemistry changes (e.g. acid dosing) are typically ≤0.05 pH/min and ≤7 mV/min (p99 on captured data), so they accumulate gradually through the filter rather than being rejected.
+
+Validation replay (`conda run -n gs2026`) over all annotated files in `data/captured/`:
+
+- `1953` valid labeled samples replayed
+- `1403` accepted, `37` rejected (`2.57%`)
+- Of rejected points: `30` out-of-range placeholders (`0/0`), `7` spike rejections
+- Near-live accepted steps (<=120 s gap): Redux p99 `7 mV`, max `14 mV`; pH p99 `0.06`, max `0.08`
+
+The common LCD transition artifact `760 -> 780 -> 760` is rejected at `780` and resumes with the next stable sample.
 
 ---
 
